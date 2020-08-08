@@ -1,24 +1,24 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Drawing;
-using System.Drawing.Imaging;
-using System.Windows.Forms;
-
-using ZXing;
-using ZXing.Common;
-using ZXing.QrCode;
-
+﻿using NLog;
 using Shadowsocks.Controller;
 using Shadowsocks.Model;
 using Shadowsocks.Properties;
 using Shadowsocks.Util;
+using System;
+using System.Diagnostics;
+using System.Drawing;
+using System.IO;
 using System.Linq;
+using System.Text;
+using System.Windows.Forms;
+using ZXing;
+using ZXing.Common;
+using ZXing.QrCode;
 
 namespace Shadowsocks.View
 {
     public class MenuViewController
     {
+        private static Logger logger = LogManager.GetCurrentClassLogger();
         // yes this is just a menu view controller
         // when config form is closed, it moves away from RAM
         // and it should just do anything related to the config form
@@ -27,15 +27,16 @@ namespace Shadowsocks.View
         private UpdateChecker updateChecker;
 
         private NotifyIcon _notifyIcon;
-        private Bitmap icon_baseBitmap;
-        private Icon icon_base, icon_in, icon_out, icon_both, targetIcon;
-        private ContextMenu contextMenu1;
+        private Icon icon, icon_in, icon_out, icon_both, previousIcon;
 
         private bool _isFirstRun;
         private bool _isStartupChecking;
-        private MenuItem enableItem;
-        private MenuItem modeItem;
+        private string _urlToOpen;
+
+        private ContextMenu contextMenu1;
+        private MenuItem disableItem;
         private MenuItem AutoStartupItem;
+        private MenuItem ProtocolHandlerItem;
         private MenuItem ShareOverLANItem;
         private MenuItem SeperatorItem;
         private MenuItem ConfigItem;
@@ -45,7 +46,7 @@ namespace Shadowsocks.View
         private MenuItem localPACItem;
         private MenuItem onlinePACItem;
         private MenuItem editLocalPACItem;
-        private MenuItem updateFromGFWListItem;
+        private MenuItem updateFromGeositeItem;
         private MenuItem editGFWUserRuleItem;
         private MenuItem editOnlinePACItem;
         private MenuItem secureLocalPacUrlToggleItem;
@@ -54,11 +55,21 @@ namespace Shadowsocks.View
         private MenuItem proxyItem;
         private MenuItem hotKeyItem;
         private MenuItem VerboseLoggingToggleItem;
+        private MenuItem ShowPluginOutputToggleItem;
+        private MenuItem WriteI18NFileItem;
+
         private ConfigForm configForm;
         private ProxyForm proxyForm;
         private LogForm logForm;
         private HotkeySettingsForm hotkeySettingsForm;
-        private string _urlToOpen;
+
+
+
+        // color definition for icon color transformation
+        private readonly Color colorMaskBlue = Color.FromArgb(255, 25, 125, 191);
+        private readonly Color colorMaskDarkSilver = Color.FromArgb(128, 192, 192, 192);
+        private readonly Color colorMaskLightSilver = Color.FromArgb(192, 192, 192);
+        private readonly Color colorMaskEclipse = Color.FromArgb(192, 64, 64, 64);
 
         public MenuViewController(ShadowsocksController controller)
         {
@@ -72,13 +83,14 @@ namespace Shadowsocks.View
             controller.UserRuleFileReadyToOpen += controller_FileReadyToOpen;
             controller.ShareOverLANStatusChanged += controller_ShareOverLANStatusChanged;
             controller.VerboseLoggingStatusChanged += controller_VerboseLoggingStatusChanged;
+            controller.ShowPluginOutputChanged += controller_ShowPluginOutputChanged;
             controller.EnableGlobalChanged += controller_EnableGlobalChanged;
             controller.Errored += controller_Errored;
-            controller.UpdatePACFromGFWListCompleted += controller_UpdatePACFromGFWListCompleted;
-            controller.UpdatePACFromGFWListError += controller_UpdatePACFromGFWListError;
+            controller.UpdatePACFromGeositeCompleted += controller_UpdatePACFromGeositeCompleted;
+            controller.UpdatePACFromGeositeError += controller_UpdatePACFromGeositeError;
 
             _notifyIcon = new NotifyIcon();
-            UpdateTrayIcon();
+            UpdateTrayIconAndNotifyText();
             _notifyIcon.Visible = true;
             _notifyIcon.ContextMenu = contextMenu1;
             _notifyIcon.BalloonTipClicked += notifyIcon1_BalloonTipClicked;
@@ -99,7 +111,7 @@ namespace Shadowsocks.View
                 _isFirstRun = true;
                 ShowConfigForm();
             }
-            else if(config.autoCheckUpdate)
+            else if (config.autoCheckUpdate)
             {
                 _isStartupChecking = true;
                 updateChecker.CheckUpdate(config, 3000);
@@ -108,7 +120,7 @@ namespace Shadowsocks.View
 
         private void controller_TrafficChanged(object sender, EventArgs e)
         {
-            if (icon_baseBitmap == null)
+            if (icon == null)
                 return;
 
             Icon newIcon;
@@ -123,54 +135,35 @@ namespace Shadowsocks.View
             else if (hasOutbound)
                 newIcon = icon_out;
             else
-                newIcon = icon_base;
+                newIcon = icon;
 
-            if (newIcon != this.targetIcon)
+            if (newIcon != this.previousIcon)
             {
-                this.targetIcon = newIcon;
+                this.previousIcon = newIcon;
                 _notifyIcon.Icon = newIcon;
             }
         }
 
         void controller_Errored(object sender, System.IO.ErrorEventArgs e)
         {
-            MessageBox.Show(e.GetException().ToString(), String.Format(I18N.GetString("Shadowsocks Error: {0}"), e.GetException().Message));
+            MessageBox.Show(e.GetException().ToString(), I18N.GetString("Shadowsocks Error: {0}", e.GetException().Message));
         }
 
         #region Tray Icon
 
-        private void UpdateTrayIcon()
+        private void UpdateTrayIconAndNotifyText()
         {
-            int dpi;
-            Graphics graphics = Graphics.FromHwnd(IntPtr.Zero);
-            dpi = (int)graphics.DpiX;
-            graphics.Dispose();
-            icon_baseBitmap = null;
-            if (dpi < 97)
-            {
-                // dpi = 96;
-                icon_baseBitmap = Resources.ss16;
-            }
-            else if (dpi < 121)
-            {
-                // dpi = 120;
-                icon_baseBitmap = Resources.ss20;
-            }
-            else
-            {
-                icon_baseBitmap = Resources.ss24;
-            }
             Configuration config = controller.GetConfigurationCopy();
             bool enabled = config.enabled;
             bool global = config.global;
-            icon_baseBitmap = getTrayIconByState(icon_baseBitmap, enabled, global);
 
-            icon_base = Icon.FromHandle(icon_baseBitmap.GetHicon());
-            targetIcon = icon_base;
-            icon_in = Icon.FromHandle(AddBitmapOverlay(icon_baseBitmap, Resources.ssIn24).GetHicon());
-            icon_out = Icon.FromHandle(AddBitmapOverlay(icon_baseBitmap, Resources.ssOut24).GetHicon());
-            icon_both = Icon.FromHandle(AddBitmapOverlay(icon_baseBitmap, Resources.ssIn24, Resources.ssOut24).GetHicon());
-            _notifyIcon.Icon = targetIcon;
+            Color colorMask = SelectColorMask(enabled, global);
+            Size iconSize = SelectIconSize();
+
+            UpdateIconSet(colorMask, iconSize, out icon, out icon_in, out icon_out, out icon_both);
+
+            previousIcon = icon;
+            _notifyIcon.Icon = previousIcon;
 
             string serverInfo = null;
             if (controller.GetCurrentStrategy() != null)
@@ -179,13 +172,13 @@ namespace Shadowsocks.View
             }
             else
             {
-                serverInfo = config.GetCurrentServer().FriendlyName();
+                serverInfo = config.GetCurrentServer().ToString();
             }
             // show more info by hacking the P/Invoke declaration for NOTIFYICONDATA inside Windows Forms
             string text = I18N.GetString("Shadowsocks") + " " + UpdateChecker.Version + "\n" +
                           (enabled ?
                               I18N.GetString("System Proxy On: ") + (global ? I18N.GetString("Global") : I18N.GetString("PAC")) :
-                              String.Format(I18N.GetString("Running: Port {0}"), config.localPort))  // this feedback is very important because they need to know Shadowsocks is running
+                              I18N.GetString("Running: Port {0}", config.localPort))  // this feedback is very important because they need to know Shadowsocks is running
                           + "\n" + serverInfo;
             if (text.Length > 127)
             {
@@ -194,56 +187,89 @@ namespace Shadowsocks.View
             ViewUtils.SetNotifyIconText(_notifyIcon, text);
         }
 
-        private Bitmap getTrayIconByState(Bitmap originIcon, bool enabled, bool global)
+        /// <summary>
+        /// Determine the icon size based on the screen DPI.
+        /// </summary>
+        /// <returns></returns>
+        /// https://stackoverflow.com/a/40851713/2075611
+        private Size SelectIconSize()
         {
-            Bitmap iconCopy = new Bitmap(originIcon);
-            for (int x = 0; x < iconCopy.Width; x++)
+            Size size = new Size(32, 32);
+            int dpi = ViewUtils.GetScreenDpi();
+            if (dpi < 97)
             {
-                for (int y = 0; y < iconCopy.Height; y++)
+                // dpi = 96;
+                size = new Size(16, 16);
+            }
+            else if (dpi < 121)
+            {
+                // dpi = 120;
+                size = new Size(20, 20);
+            }
+            else if (dpi < 145)
+            {
+                // dpi = 144;
+                size = new Size(24, 24);
+            }
+            else
+            {
+                // dpi = 168;
+                size = new Size(28, 28);
+            }
+            return size;
+        }
+
+        private Color SelectColorMask(bool isProxyEnabled, bool isGlobalProxy)
+        {
+            Color colorMask = Color.White;
+
+            Utils.WindowsThemeMode currentWindowsThemeMode = Utils.GetWindows10SystemThemeSetting();
+
+            if (isProxyEnabled)
+            {
+                if (isGlobalProxy)  // global
                 {
-                    Color color = originIcon.GetPixel(x, y);
-                    if (color.A != 0)
+                    colorMask = colorMaskBlue;
+                }
+                else  // PAC
+                {
+                    if (currentWindowsThemeMode == Utils.WindowsThemeMode.Light)
                     {
-                        if (!enabled)
-                        {
-                            Color flyBlue = Color.FromArgb(192, 192, 192);
-                            // Multiply with flyBlue
-                            int red = color.R * flyBlue.R / 255;
-                            int green = color.G * flyBlue.G / 255;
-                            int blue = color.B * flyBlue.B / 255;
-                            iconCopy.SetPixel(x, y, Color.FromArgb(color.A, red, green, blue));
-                        }
-                        else if (global)
-                        {
-                            Color flyBlue = Color.FromArgb(25, 125, 191);
-                            // Multiply with flyBlue
-                            int red   = color.R * flyBlue.R / 255;
-                            int green = color.G * flyBlue.G / 255; 
-                            int blue  = color.B * flyBlue.B / 255;
-                            iconCopy.SetPixel(x, y, Color.FromArgb(color.A, red, green, blue));
-                        }
-                    }
-                    else
-                    {
-                        iconCopy.SetPixel(x, y, Color.FromArgb(color.A, color.R, color.G, color.B));
+                        colorMask = colorMaskEclipse;
                     }
                 }
             }
-            return iconCopy;
+            else  // disabled
+            {
+                if (currentWindowsThemeMode == Utils.WindowsThemeMode.Light)
+                {
+                    colorMask = colorMaskDarkSilver;
+                }
+                else
+                {
+                    colorMask = colorMaskLightSilver;
+                }
+            }
+
+            return colorMask;
         }
 
-        private Bitmap AddBitmapOverlay(Bitmap original, params Bitmap[] overlays)
+        private void UpdateIconSet(Color colorMask, Size size,
+            out Icon icon, out Icon icon_in, out Icon icon_out, out Icon icon_both)
         {
-            Bitmap bitmap = new Bitmap(original.Width, original.Height, PixelFormat.Format64bppArgb);
-            Graphics canvas = Graphics.FromImage(bitmap);
-            canvas.DrawImage(original, new Point(0, 0));
-            foreach (Bitmap overlay in overlays)
-            {
-                canvas.DrawImage(new Bitmap(overlay, original.Size), new Point(0, 0));
-            }
-            canvas.Save();
-            return bitmap;
+            Bitmap iconBitmap;
+
+            // generate the base icon
+            iconBitmap = ViewUtils.ChangeBitmapColor(Resources.ss32Fill, colorMask);
+            iconBitmap = ViewUtils.AddBitmapOverlay(iconBitmap, Resources.ss32Outline);
+
+            icon = Icon.FromHandle(ViewUtils.ResizeBitmap(iconBitmap, size.Width, size.Height).GetHicon());
+            icon_in = Icon.FromHandle(ViewUtils.ResizeBitmap(ViewUtils.AddBitmapOverlay(iconBitmap, Resources.ss32In), size.Width, size.Height).GetHicon());
+            icon_out = Icon.FromHandle(ViewUtils.ResizeBitmap(ViewUtils.AddBitmapOverlay(iconBitmap, Resources.ss32In), size.Width, size.Height).GetHicon());
+            icon_both = Icon.FromHandle(ViewUtils.ResizeBitmap(ViewUtils.AddBitmapOverlay(iconBitmap, Resources.ss32In, Resources.ss32Out), size.Width, size.Height).GetHicon());
         }
+
+
 
         #endregion
 
@@ -262,8 +288,8 @@ namespace Shadowsocks.View
         private void LoadMenu()
         {
             this.contextMenu1 = new ContextMenu(new MenuItem[] {
-                this.enableItem = CreateMenuItem("Enable System Proxy", new EventHandler(this.EnableItem_Click)),
-                this.modeItem = CreateMenuGroup("Mode", new MenuItem[] {
+                CreateMenuGroup("System Proxy", new MenuItem[] {
+                    this.disableItem = CreateMenuItem("Disable", new EventHandler(this.EnableItem_Click)),
                     this.PACModeItem = CreateMenuItem("PAC", new EventHandler(this.PACModeItem_Click)),
                     this.globalModeItem = CreateMenuItem("Global", new EventHandler(this.GlobalModeItem_Click))
                 }),
@@ -281,8 +307,8 @@ namespace Shadowsocks.View
                     this.onlinePACItem = CreateMenuItem("Online PAC", new EventHandler(this.OnlinePACItem_Click)),
                     new MenuItem("-"),
                     this.editLocalPACItem = CreateMenuItem("Edit Local PAC File...", new EventHandler(this.EditPACFileItem_Click)),
-                    this.updateFromGFWListItem = CreateMenuItem("Update Local PAC from GFWList", new EventHandler(this.UpdatePACFromGFWListItem_Click)),
-                    this.editGFWUserRuleItem = CreateMenuItem("Edit User Rule for GFWList...", new EventHandler(this.EditUserRuleFileForGFWListItem_Click)),
+                    this.updateFromGeositeItem = CreateMenuItem("Update Local PAC from Geosite", new EventHandler(this.UpdatePACFromGeositeItem_Click)),
+                    this.editGFWUserRuleItem = CreateMenuItem("Edit User Rule for Geosite...", new EventHandler(this.EditUserRuleFileForGeositeItem_Click)),
                     this.secureLocalPacUrlToggleItem = CreateMenuItem("Secure Local PAC", new EventHandler(this.SecureLocalPacUrlToggleItem_Click)),
                     CreateMenuItem("Copy Local PAC URL", new EventHandler(this.CopyLocalPacUrlItem_Click)),
                     this.editOnlinePACItem = CreateMenuItem("Edit Online PAC URL...", new EventHandler(this.UpdateOnlinePACURLItem_Click)),
@@ -290,12 +316,15 @@ namespace Shadowsocks.View
                 this.proxyItem = CreateMenuItem("Forward Proxy...", new EventHandler(this.proxyItem_Click)),
                 new MenuItem("-"),
                 this.AutoStartupItem = CreateMenuItem("Start on Boot", new EventHandler(this.AutoStartupItem_Click)),
+                this.ProtocolHandlerItem = CreateMenuItem("Associate ss:// Links", new EventHandler(this.ProtocolHandlerItem_Click)),
                 this.ShareOverLANItem = CreateMenuItem("Allow other Devices to connect", new EventHandler(this.ShareOverLANItem_Click)),
                 new MenuItem("-"),
                 this.hotKeyItem = CreateMenuItem("Edit Hotkeys...", new EventHandler(this.hotKeyItem_Click)),
                 CreateMenuGroup("Help", new MenuItem[] {
                     CreateMenuItem("Show Logs...", new EventHandler(this.ShowLogItem_Click)),
                     this.VerboseLoggingToggleItem = CreateMenuItem( "Verbose Logging", new EventHandler(this.VerboseLoggingToggleItem_Click) ),
+                    this.ShowPluginOutputToggleItem = CreateMenuItem("Show Plugin Output", new EventHandler(this.ShowPluginOutputToggleItem_Click)),
+                    this.WriteI18NFileItem = CreateMenuItem("Write translation template",new EventHandler(WriteI18NFileItem_Click)),
                     CreateMenuGroup("Updates...", new MenuItem[] {
                         CreateMenuItem("Check for Updates...", new EventHandler(this.checkUpdatesItem_Click)),
                         new MenuItem("-"),
@@ -314,13 +343,12 @@ namespace Shadowsocks.View
         private void controller_ConfigChanged(object sender, EventArgs e)
         {
             LoadCurrentConfiguration();
-            UpdateTrayIcon();
+            UpdateTrayIconAndNotifyText();
         }
 
         private void controller_EnableStatusChanged(object sender, EventArgs e)
         {
-            enableItem.Checked = controller.GetConfigurationCopy().enabled;
-            modeItem.Enabled = enableItem.Checked;
+            disableItem.Checked = !controller.GetConfigurationCopy().enabled;
         }
 
         void controller_ShareOverLANStatusChanged(object sender, EventArgs e)
@@ -328,8 +356,14 @@ namespace Shadowsocks.View
             ShareOverLANItem.Checked = controller.GetConfigurationCopy().shareOverLan;
         }
 
-        void controller_VerboseLoggingStatusChanged(object sender, EventArgs e) {
+        void controller_VerboseLoggingStatusChanged(object sender, EventArgs e)
+        {
             VerboseLoggingToggleItem.Checked = controller.GetConfigurationCopy().isVerboseLogging;
+        }
+
+        void controller_ShowPluginOutputChanged(object sender, EventArgs e)
+        {
+            ShowPluginOutputToggleItem.Checked = controller.GetConfigurationCopy().showPluginOutput;
         }
 
         void controller_EnableGlobalChanged(object sender, EventArgs e)
@@ -342,7 +376,7 @@ namespace Shadowsocks.View
         {
             string argument = @"/select, " + e.Path;
 
-            System.Diagnostics.Process.Start("explorer.exe", argument);
+            Process.Start("explorer.exe", argument);
         }
 
         void ShowBalloonTip(string title, string content, ToolTipIcon icon, int timeout)
@@ -353,17 +387,17 @@ namespace Shadowsocks.View
             _notifyIcon.ShowBalloonTip(timeout);
         }
 
-        void controller_UpdatePACFromGFWListError(object sender, System.IO.ErrorEventArgs e)
+        void controller_UpdatePACFromGeositeError(object sender, System.IO.ErrorEventArgs e)
         {
             ShowBalloonTip(I18N.GetString("Failed to update PAC file"), e.GetException().Message, ToolTipIcon.Error, 5000);
-            Logging.LogUsefulException(e.GetException());
+            logger.LogUsefulException(e.GetException());
         }
 
-        void controller_UpdatePACFromGFWListCompleted(object sender, GFWListUpdater.ResultEventArgs e)
+        void controller_UpdatePACFromGeositeCompleted(object sender, GeositeResultEventArgs e)
         {
             string result = e.Success
                 ? I18N.GetString("PAC updated")
-                : I18N.GetString("No updates found. Please report to GFWList if you have problems with it.");
+                : I18N.GetString("No updates found. Please report to Geosite if you have problems with it.");
             ShowBalloonTip(I18N.GetString("Shadowsocks"), result, ToolTipIcon.Info, 1000);
         }
 
@@ -371,7 +405,7 @@ namespace Shadowsocks.View
         {
             if (updateChecker.NewVersionFound)
             {
-                ShowBalloonTip(String.Format(I18N.GetString("Shadowsocks {0} Update Found"), updateChecker.LatestVersionNumber + updateChecker.LatestVersionSuffix), I18N.GetString("Click here to update"), ToolTipIcon.Info, 5000);
+                ShowBalloonTip(I18N.GetString("Shadowsocks {0} Update Found", updateChecker.LatestVersionNumber + updateChecker.LatestVersionSuffix), I18N.GetString("Click here to update"), ToolTipIcon.Info, 5000);
             }
             else if (!_isStartupChecking)
             {
@@ -385,10 +419,10 @@ namespace Shadowsocks.View
             if (updateChecker.NewVersionFound)
             {
                 updateChecker.NewVersionFound = false; /* Reset the flag */
-                if (System.IO.File.Exists(updateChecker.LatestVersionLocalName))
+                if (File.Exists(updateChecker.LatestVersionLocalName))
                 {
                     string argument = "/select, \"" + updateChecker.LatestVersionLocalName + "\"";
-                    System.Diagnostics.Process.Start("explorer.exe", argument);
+                    Process.Start("explorer.exe", argument);
                 }
             }
         }
@@ -405,13 +439,12 @@ namespace Shadowsocks.View
         {
             Configuration config = controller.GetConfigurationCopy();
             UpdateServersMenu();
-            enableItem.Checked = config.enabled;
-            modeItem.Enabled = config.enabled;
-            globalModeItem.Checked = config.global;
-            PACModeItem.Checked = !config.global;
+            UpdateSystemProxyItemsEnabledStatus(config);
             ShareOverLANItem.Checked = config.shareOverLan;
             VerboseLoggingToggleItem.Checked = config.isVerboseLogging;
+            ShowPluginOutputToggleItem.Checked = config.showPluginOutput;
             AutoStartupItem.Checked = AutoStartup.Check();
+            ProtocolHandlerItem.Checked = ProtocolHandler.Check();
             onlinePACItem.Checked = onlinePACItem.Enabled && config.useOnlinePac;
             localPACItem.Checked = !onlinePACItem.Checked;
             secureLocalPacUrlToggleItem.Checked = config.secureLocalPac;
@@ -426,28 +459,31 @@ namespace Shadowsocks.View
             {
                 items.RemoveAt(0);
             }
-            int i = 0;
+            int strategyCount = 0;
             foreach (var strategy in controller.GetStrategies())
             {
                 MenuItem item = new MenuItem(strategy.Name);
                 item.Tag = strategy.ID;
                 item.Click += AStrategyItem_Click;
-                items.Add(i, item);
-                i++;
+                items.Add(strategyCount, item);
+                strategyCount++;
             }
 
             // user wants a seperator item between strategy and servers menugroup
-            items.Add( i++, new MenuItem("-") );
+            items.Add(strategyCount++, new MenuItem("-"));
 
-            int strategyCount = i;
+            int serverCount = 0;
             Configuration configuration = controller.GetConfigurationCopy();
             foreach (var server in configuration.configs)
             {
-                MenuItem item = new MenuItem(server.FriendlyName());
-                item.Tag = i - strategyCount;
-                item.Click += AServerItem_Click;
-                items.Add(i, item);
-                i++;
+                if (Configuration.ChecksServer(server))
+                {
+                    MenuItem item = new MenuItem(server.ToString());
+                    item.Tag = configuration.configs.FindIndex(s => s == server);
+                    item.Click += AServerItem_Click;
+                    items.Add(strategyCount + serverCount, item);
+                    serverCount++;
+                }
             }
 
             foreach (MenuItem item in items)
@@ -512,7 +548,7 @@ namespace Shadowsocks.View
             }
             else
             {
-                logForm = new LogForm(controller, Logging.LogFilePath);
+                logForm = new LogForm(controller);
                 logForm.Show();
                 logForm.Activate();
                 logForm.FormClosed += logForm_FormClosed;
@@ -534,7 +570,12 @@ namespace Shadowsocks.View
             if (_isFirstRun)
             {
                 CheckUpdateForFirstRun();
-                ShowFirstTimeBalloon();
+                ShowBalloonTip(
+                    I18N.GetString("Shadowsocks is here"),
+                    I18N.GetString("You can turn on/off Shadowsocks in the context menu"),
+                    ToolTipIcon.Info,
+                    0
+                );
                 _isFirstRun = false;
             }
         }
@@ -573,14 +614,6 @@ namespace Shadowsocks.View
             updateChecker.CheckUpdate(config, 3000);
         }
 
-        private void ShowFirstTimeBalloon()
-        {
-            _notifyIcon.BalloonTipTitle = I18N.GetString("Shadowsocks is here");
-            _notifyIcon.BalloonTipText = I18N.GetString("You can turn on/off Shadowsocks in the context menu");
-            _notifyIcon.BalloonTipIcon = ToolTipIcon.Info;
-            _notifyIcon.ShowBalloonTip(0);
-        }
-
         private void AboutItem_Click(object sender, EventArgs e)
         {
             Process.Start("https://github.com/shadowsocks/shadowsocks-windows");
@@ -588,7 +621,8 @@ namespace Shadowsocks.View
 
         private void notifyIcon1_Click(object sender, MouseEventArgs e)
         {
-            if ( e.Button == MouseButtons.Middle )
+            UpdateTrayIconAndNotifyText();
+            if (e.Button == MouseButtons.Middle)
             {
                 ShowLogForm();
             }
@@ -604,17 +638,40 @@ namespace Shadowsocks.View
 
         private void EnableItem_Click(object sender, EventArgs e)
         {
-            controller.ToggleEnable(!enableItem.Checked);
+            controller.ToggleEnable(false);
+            Configuration config = controller.GetConfigurationCopy();
+            UpdateSystemProxyItemsEnabledStatus(config);
+        }
+
+        private void UpdateSystemProxyItemsEnabledStatus(Configuration config)
+        {
+            disableItem.Checked = !config.enabled;
+            if (!config.enabled)
+            {
+                globalModeItem.Checked = false;
+                PACModeItem.Checked = false;
+            }
+            else
+            {
+                globalModeItem.Checked = config.global;
+                PACModeItem.Checked = !config.global;
+            }
         }
 
         private void GlobalModeItem_Click(object sender, EventArgs e)
         {
+            controller.ToggleEnable(true);
             controller.ToggleGlobal(true);
+            Configuration config = controller.GetConfigurationCopy();
+            UpdateSystemProxyItemsEnabledStatus(config);
         }
 
         private void PACModeItem_Click(object sender, EventArgs e)
         {
+            controller.ToggleEnable(true);
             controller.ToggleGlobal(false);
+            Configuration config = controller.GetConfigurationCopy();
+            UpdateSystemProxyItemsEnabledStatus(config);
         }
 
         private void ShareOverLANItem_Click(object sender, EventArgs e)
@@ -628,12 +685,12 @@ namespace Shadowsocks.View
             controller.TouchPACFile();
         }
 
-        private void UpdatePACFromGFWListItem_Click(object sender, EventArgs e)
+        private async void UpdatePACFromGeositeItem_Click(object sender, EventArgs e)
         {
-            controller.UpdatePACFromGFWList();
+            await GeositeUpdater.UpdatePACFromGeosite();
         }
 
-        private void EditUserRuleFileForGFWListItem_Click(object sender, EventArgs e)
+        private void EditUserRuleFileForGeositeItem_Click(object sender, EventArgs e)
         {
             controller.TouchUserRuleFile();
         }
@@ -650,9 +707,21 @@ namespace Shadowsocks.View
             controller.SelectStrategy((string)item.Tag);
         }
 
-        private void VerboseLoggingToggleItem_Click( object sender, EventArgs e ) {
-            VerboseLoggingToggleItem.Checked = ! VerboseLoggingToggleItem.Checked;
-            controller.ToggleVerboseLogging( VerboseLoggingToggleItem.Checked );
+        private void VerboseLoggingToggleItem_Click(object sender, EventArgs e)
+        {
+            VerboseLoggingToggleItem.Checked = !VerboseLoggingToggleItem.Checked;
+            controller.ToggleVerboseLogging(VerboseLoggingToggleItem.Checked);
+        }
+
+        private void ShowPluginOutputToggleItem_Click(object sender, EventArgs e)
+        {
+            ShowPluginOutputToggleItem.Checked = !ShowPluginOutputToggleItem.Checked;
+            controller.ToggleShowPluginOutput(ShowPluginOutputToggleItem.Checked);
+        }
+
+        private void WriteI18NFileItem_Click(object sender, EventArgs e)
+        {
+            File.WriteAllText(I18N.I18N_FILE, Resources.i18n_csv, Encoding.UTF8);
         }
 
         private void StatisticsConfigItem_Click(object sender, EventArgs e)
@@ -755,8 +824,7 @@ namespace Shadowsocks.View
 
         private void ImportURLItem_Click(object sender, EventArgs e)
         {
-            var success = controller.AddServerBySSURL(Clipboard.GetText(TextDataFormat.Text));
-            if (success)
+            if (controller.AskAddServerBySSURL(Clipboard.GetText(TextDataFormat.Text)))
             {
                 ShowConfigForm();
             }
@@ -779,6 +847,16 @@ namespace Shadowsocks.View
             {
                 MessageBox.Show(I18N.GetString("Failed to update registry"));
             }
+            LoadCurrentConfiguration();
+        }
+        private void ProtocolHandlerItem_Click(object sender, EventArgs e)
+        {
+            ProtocolHandlerItem.Checked = !ProtocolHandlerItem.Checked;
+            if (!ProtocolHandler.Set(ProtocolHandlerItem.Checked))
+            {
+                MessageBox.Show(I18N.GetString("Failed to update registry"));
+            }
+            LoadCurrentConfiguration();
         }
 
         private void LocalPACItem_Click(object sender, EventArgs e)
@@ -839,14 +917,14 @@ namespace Shadowsocks.View
             if (this.localPACItem.Checked)
             {
                 this.editLocalPACItem.Enabled = true;
-                this.updateFromGFWListItem.Enabled = true;
+                this.updateFromGeositeItem.Enabled = true;
                 this.editGFWUserRuleItem.Enabled = true;
                 this.editOnlinePACItem.Enabled = false;
             }
             else
             {
                 this.editLocalPACItem.Enabled = false;
-                this.updateFromGFWListItem.Enabled = false;
+                this.updateFromGeositeItem.Enabled = false;
                 this.editGFWUserRuleItem.Enabled = false;
                 this.editOnlinePACItem.Enabled = true;
             }

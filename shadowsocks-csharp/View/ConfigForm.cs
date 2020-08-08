@@ -1,15 +1,11 @@
-﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Drawing;
-using System.Text;
-using System.Windows.Forms;
-using System.Diagnostics;
-using Microsoft.Win32;
 using Shadowsocks.Controller;
 using Shadowsocks.Model;
 using Shadowsocks.Properties;
-using System.Threading.Tasks;
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Linq;
+using System.Windows.Forms;
 
 namespace Shadowsocks.View
 {
@@ -21,57 +17,144 @@ namespace Shadowsocks.View
         private Configuration _modifiedConfiguration;
         private int _lastSelectedIndex = -1;
 
+        private bool isChange = false;
+
+        private class EncryptionMethod
+        {
+            public readonly string name;
+            public readonly bool deprecated;
+
+            // Edit here to add/delete encryption method displayed in UI
+            private static string[] deprecatedMethod = new string[]
+            {
+                "rc4-md5",
+                "salsa20",
+                "chacha20",
+                "bf-cfb",
+                "chacha20-ietf",
+                "aes-256-cfb",
+                "aes-192-cfb",
+                "aes-128-cfb",
+                "aes-256-ctr",
+                "aes-192-ctr",
+                "aes-128-ctr",
+                "camellia-256-cfb",
+                "camellia-192-cfb",
+                "camellia-128-cfb",
+            };
+            private static string[] inuseMethod = new string[]
+            {
+                "aes-256-gcm",
+                "aes-192-gcm",
+                "aes-128-gcm",
+                "chacha20-ietf-poly1305",
+                "xchacha20-ietf-poly1305",
+            };
+            public static EncryptionMethod[] AllMethods
+            {
+                get
+                {
+                    if (!init) Init();
+                    return allMethods;
+                }
+            }
+            private static bool init = false;
+            private static EncryptionMethod[] allMethods;
+            private static Dictionary<string, EncryptionMethod> methodByName = new Dictionary<string, EncryptionMethod>();
+            private static void Init()
+            {
+                var all = new List<EncryptionMethod>();
+
+                all.AddRange(inuseMethod.Select(i => new EncryptionMethod(i, false)));
+                all.AddRange(deprecatedMethod.Select(d => new EncryptionMethod(d, true)));
+
+                allMethods = all.ToArray();
+                foreach (var item in all)
+                {
+                    methodByName[item.name] = item;
+                }
+                init = true;
+            }
+
+            public static EncryptionMethod GetMethod(string name)
+            {
+                if (!init) Init();
+                bool success = methodByName.TryGetValue(name, out EncryptionMethod method);
+                if (!success)
+                {
+                    string defaultMethod = Server.DefaultMethod;
+                    MessageBox.Show(I18N.GetString("Encryption method {0} not exist, will replace with {1}", name, defaultMethod), I18N.GetString("Shadowsocks"));
+                    return methodByName[defaultMethod];
+                }
+                return method;
+            }
+
+            private EncryptionMethod(string name, bool deprecated)
+            {
+                this.name = name;
+                this.deprecated = deprecated;
+            }
+
+            public override string ToString()
+            {
+                return deprecated ? $"{name} ({I18N.GetString("deprecated")})" : name;
+            }
+        }
+
         public ConfigForm(ShadowsocksController controller)
         {
-            this.Font = SystemFonts.MessageBoxFont;
+            Font = SystemFonts.MessageBoxFont;
             InitializeComponent();
+            EncryptionSelect.Items.AddRange(EncryptionMethod.AllMethods);
 
             // a dirty hack
-            this.ServersListBox.Dock = DockStyle.Fill;
-            this.tableLayoutPanel5.Dock = DockStyle.Fill;
-            this.PerformLayout();
+            ServersListBox.Dock = DockStyle.Fill;
+            tableLayoutPanel5.Dock = DockStyle.Fill;
+            PerformLayout();
 
             UpdateTexts();
-            this.Icon = Icon.FromHandle(Resources.ssw128.GetHicon());
+            SetupValueChangedListeners();
+            Icon = Icon.FromHandle(Resources.ssw128.GetHicon());
 
             this.controller = controller;
-            controller.ConfigChanged += controller_ConfigChanged;
+            controller.ConfigChanged += Controller_ConfigChanged;
 
             LoadCurrentConfiguration();
         }
 
         private void UpdateTexts()
         {
-            AddButton.Text = I18N.GetString("&Add");
-            DeleteButton.Text = I18N.GetString("&Delete");
-            DuplicateButton.Text = I18N.GetString("Dupli&cate");
-            IPLabel.Text = I18N.GetString("Server Addr");
-            ServerPortLabel.Text = I18N.GetString("Server Port");
-            PasswordLabel.Text = I18N.GetString("Password");
-            ShowPasswdCheckBox.Text = I18N.GetString("Show Password");
-            EncryptionLabel.Text = I18N.GetString("Encryption");
-            PluginLabel.Text = I18N.GetString("Plugin Program");
-            PluginOptionsLabel.Text = I18N.GetString("Plugin Options");
-            PluginArgumentsLabel.Text = I18N.GetString("Plugin Arguments");
-            ProxyPortLabel.Text = I18N.GetString("Proxy Port");
-            PortableModeCheckBox.Text = I18N.GetString("Portable Mode");
-            toolTip1.SetToolTip(this.PortableModeCheckBox, I18N.GetString("Restart required"));
-            RemarksLabel.Text = I18N.GetString("Remarks");
-            TimeoutLabel.Text = I18N.GetString("Timeout(Sec)");
-            ServerGroupBox.Text = I18N.GetString("Server");
-            OKButton.Text = I18N.GetString("OK");
-            MyCancelButton.Text = I18N.GetString("Cancel");
-            MoveUpButton.Text = I18N.GetString("Move &Up");
-            MoveDownButton.Text = I18N.GetString("Move D&own");
-            this.Text = I18N.GetString("Edit Servers");
+            I18N.TranslateForm(this);
+            toolTip1.SetToolTip(PortableModeCheckBox, I18N.GetString("Restart required"));
         }
 
-        private void controller_ConfigChanged(object sender, EventArgs e)
+        private void SetupValueChangedListeners()
+        {
+            IPTextBox.TextChanged += ConfigValueChanged;
+            ProxyPortTextBox.TextChanged += ConfigValueChanged;
+            PasswordTextBox.TextChanged += ConfigValueChanged;
+            EncryptionSelect.SelectedIndexChanged += ConfigValueChanged;
+            PluginTextBox.TextChanged += ConfigValueChanged;
+            PluginArgumentsTextBox.TextChanged += ConfigValueChanged;
+            PluginOptionsTextBox.TextChanged += ConfigValueChanged;
+            RemarksTextBox.TextChanged += ConfigValueChanged;
+            TimeoutTextBox.TextChanged += ConfigValueChanged;
+            PortableModeCheckBox.CheckedChanged += ConfigValueChanged;
+            ServerPortTextBox.TextChanged += ConfigValueChanged;
+        }
+
+        private void Controller_ConfigChanged(object sender, EventArgs e)
         {
             LoadCurrentConfiguration();
         }
 
-        private bool ValidateAndSaveSelectedServerDetails()
+        private void ConfigValueChanged(object sender, EventArgs e)
+        {
+            isChange = true;
+            ApplyButton.Enabled = true;
+        }
+
+        private bool ValidateAndSaveSelectedServerDetails(bool isSave = false, bool isCopy = false)
         {
             try
             {
@@ -79,15 +162,17 @@ namespace Shadowsocks.View
                 {
                     return true;
                 }
-                Server server = GetServerDetailsFromUI();
-                if (server == null)
-                {
-                    return false;
-                }
-                Configuration.CheckServer(server);
-                _modifiedConfiguration.configs[_lastSelectedIndex] = server;
 
-                return true;
+                bool verify = GetServerDetailsFromUI(out Server server, isSave, isCopy);
+
+                if (server != null)
+                {
+                    if (isSave || isCopy)
+                        Configuration.CheckServer(server);
+
+                    _modifiedConfiguration.configs[_lastSelectedIndex] = server;
+                }
+                return verify;
             }
             catch (Exception ex)
             {
@@ -96,35 +181,211 @@ namespace Shadowsocks.View
             return false;
         }
 
-        private Server GetServerDetailsFromUI()
+        private bool GetServerDetailsFromUI(out Server server, bool isSave = false, bool isCopy = false)
         {
-            Server server = new Server();
-            if (Uri.CheckHostName(server.server = IPTextBox.Text.Trim()) == UriHostNameType.Unknown)
+            server = null;
+
+            bool? checkIP = false;
+            bool? checkPort = false;
+            bool? checkPassword = false;
+            bool? checkTimeout = false;
+
+            if ((checkIP = CheckIPTextBox(out string address, isSave, isCopy)).GetValueOrDefault(false) && address != null
+                    && (checkPort = CheckServerPortTextBox(out int? addressPort, isSave, isCopy)).GetValueOrDefault(false) && addressPort.HasValue
+                        && (checkPassword = CheckPasswordTextBox(out string serverPassword, isSave, isCopy)).GetValueOrDefault(false) && serverPassword != null
+                            && (checkTimeout = CheckTimeoutTextBox(out int? timeout, isSave, isCopy)).GetValueOrDefault(false) && timeout.HasValue)
             {
-                MessageBox.Show(I18N.GetString("Invalid server address"));
-                IPTextBox.Focus();
-                return null;
+                server = new Server()
+                {
+                    server = address,
+                    server_port = addressPort.Value,
+                    password = serverPassword,
+                    method = ((EncryptionMethod)EncryptionSelect.SelectedItem).name,
+                    plugin = PluginTextBox.Text,
+                    plugin_opts = PluginOptionsTextBox.Text,
+                    plugin_args = PluginArgumentsTextBox.Text,
+                    remarks = RemarksTextBox.Text,
+                    timeout = timeout.Value,
+                };
+
+                return true;
             }
-            if (!int.TryParse(ServerPortTextBox.Text, out server.server_port))
+
+            if (checkIP == null || checkPort == null || checkTimeout == null)
             {
-                MessageBox.Show(I18N.GetString("Illegal port number format"));
-                ServerPortTextBox.Focus();
-                return null;
+                _modifiedConfiguration.configs.RemoveAt(_lastSelectedIndex);
+                ServersListBox.SelectedIndexChanged -= ServersListBox_SelectedIndexChanged;
+
+                int lastIndex = ServersListBox.SelectedIndex;
+
+                LoadServerNameListToUI(_modifiedConfiguration);
+
+                _lastSelectedIndex = (ServersListBox.SelectedIndex = (_lastSelectedIndex == ServersListBox.Items.Count ? lastIndex : lastIndex - 1));
+
+                ServersListBox.SelectedIndexChanged += ServersListBox_SelectedIndexChanged;
+                return true;
             }
-            server.password = PasswordTextBox.Text;
-            server.method = EncryptionSelect.Text;
-            server.plugin = PluginTextBox.Text;
-            server.plugin_opts = PluginOptionsTextBox.Text;
-            server.plugin_args = PluginArgumentsTextBox.Text;
-            server.remarks = RemarksTextBox.Text;
-            if (!int.TryParse(TimeoutTextBox.Text, out server.timeout))
-            {
-                MessageBox.Show(I18N.GetString("Illegal timeout format"));
-                TimeoutTextBox.Focus();
-                return null;
-            }
-            return server;
+            else
+                return false;
         }
+
+        #region GetServerDetailsFromUI Check
+
+        private bool? CheckIPTextBox(out string address, bool isSave, bool isCopy)
+        {
+            address = null;
+            string outAddress;
+            if (Uri.CheckHostName(outAddress = IPTextBox.Text.Trim()) == UriHostNameType.Unknown)
+            {
+                if (!isSave && !isCopy && ServersListBox.Items.Count > 1 && I18N.GetString("New server").Equals(ServersListBox.Items[_lastSelectedIndex].ToString()))
+                {
+                    DialogResult result = MessageBox.Show(I18N.GetString("Whether to discard unconfigured servers"), I18N.GetString("Operation failure"), MessageBoxButtons.OKCancel);
+
+                    if (result == DialogResult.OK)
+                        return null;
+                }
+                else if (isChange && !isSave && !isCopy)
+                {
+                    var result = MessageBox.Show(I18N.GetString("Invalid server address, Cannot automatically save or discard changes"), I18N.GetString("Auto save failed"), MessageBoxButtons.OKCancel);
+
+                    if (result == DialogResult.Cancel)
+                        return false;
+                    else
+                    {
+                        address = _modifiedConfiguration.configs[_lastSelectedIndex].server;
+                        return true;
+                    }
+                }
+                else
+                {
+                    MessageBox.Show(I18N.GetString("Invalid server address"), I18N.GetString("Operation failure"));
+                    IPTextBox.Focus();
+                }
+                return false;
+            }
+            else
+            {
+                address = outAddress;
+            }
+            return true;
+        }
+
+        private bool? CheckServerPortTextBox(out int? addressPort, bool isSave, bool isCopy)
+        {
+            addressPort = null;
+            if (!int.TryParse(ServerPortTextBox.Text, out int outaddressPort))
+            {
+                if (!isSave && !isCopy && ServersListBox.Items.Count > 1 && I18N.GetString("New server").Equals(ServersListBox.Items[_lastSelectedIndex].ToString()))
+                {
+                    DialogResult result = MessageBox.Show(I18N.GetString("Whether to discard unconfigured servers"), I18N.GetString("Operation failure"), MessageBoxButtons.OKCancel);
+
+                    if (result == DialogResult.OK)
+                        return null;
+                }
+                else if (isChange && !isSave && !isCopy)
+                {
+                    var result = MessageBox.Show(I18N.GetString("Illegal port number format, Cannot automatically save or discard changes"), I18N.GetString("Auto save failed"), MessageBoxButtons.OKCancel);
+
+                    if (result == DialogResult.Cancel)
+                        return false;
+                    else
+                    {
+                        addressPort = _modifiedConfiguration.configs[_lastSelectedIndex].server_port;
+                        return true;
+                    }
+                }
+                else
+                {
+                    MessageBox.Show(I18N.GetString("Illegal port number format"), I18N.GetString("Operation failure"));
+                    ServerPortTextBox.Focus();
+                }
+                return false;
+            }
+            else
+            {
+                addressPort = outaddressPort;
+            }
+            return true;
+        }
+
+        private bool? CheckPasswordTextBox(out string password, bool isSave, bool isCopy)
+        {
+            password = null;
+            string outPassword;
+            if ((outPassword = PasswordTextBox.Text).IsNullOrWhiteSpace())
+            {
+                if (!isSave && !isCopy && ServersListBox.Items.Count > 1 && I18N.GetString("New server").Equals(ServersListBox.Items[_lastSelectedIndex].ToString()))
+                {
+                    DialogResult result = MessageBox.Show(I18N.GetString("Whether to discard unconfigured servers"), I18N.GetString("Operation failure"), MessageBoxButtons.OKCancel);
+
+                    if (result == DialogResult.OK)
+                        return null;
+                }
+                else if (isChange && !isSave && !isCopy)
+                {
+                    var result = MessageBox.Show(I18N.GetString("Password can not be blank, Cannot automatically save or discard changes"), I18N.GetString("Auto save failed"), MessageBoxButtons.OKCancel);
+
+                    if (result == DialogResult.Cancel)
+                        return false;
+                    else
+                    {
+                        password = _modifiedConfiguration.configs[_lastSelectedIndex].password;
+                        return true;
+                    }
+                }
+                else
+                {
+                    MessageBox.Show(I18N.GetString("Password can not be blank"), I18N.GetString("Operation failure"));
+                    PasswordTextBox.Focus();
+                }
+                return false;
+            }
+            else
+            {
+                password = outPassword;
+            }
+            return true;
+        }
+
+        private bool? CheckTimeoutTextBox(out int? timeout, bool isSave, bool isCopy)
+        {
+            timeout = null;
+            if (!int.TryParse(TimeoutTextBox.Text, out int outTimeout))
+            {
+                if (!isSave && !isCopy && ServersListBox.Items.Count > 1 && I18N.GetString("New server").Equals(ServersListBox.Items[_lastSelectedIndex].ToString()))
+                {
+                    DialogResult result = MessageBox.Show(I18N.GetString("Whether to discard unconfigured servers"), I18N.GetString("Operation failure"), MessageBoxButtons.OKCancel);
+
+                    if (result == DialogResult.OK)
+                        return null;
+                }
+                else if (isChange && !isSave && !isCopy)
+                {
+                    var result = MessageBox.Show(I18N.GetString("Illegal timeout format, Cannot automatically save or discard changes"), I18N.GetString("Auto save failed"), MessageBoxButtons.OKCancel);
+
+                    if (result == DialogResult.Cancel)
+                        return false;
+                    else
+                    {
+                        timeout = _modifiedConfiguration.configs[_lastSelectedIndex].timeout;
+                        return true;
+                    }
+                }
+                else
+                {
+                    MessageBox.Show(I18N.GetString("Illegal timeout format"), I18N.GetString("Operation failure"));
+                    TimeoutTextBox.Focus();
+                }
+                return false;
+            }
+            else
+            {
+                timeout = outTimeout;
+            }
+            return true;
+        }
+
+        #endregion
 
         private void LoadSelectedServerDetails()
         {
@@ -140,12 +401,25 @@ namespace Shadowsocks.View
             IPTextBox.Text = server.server;
             ServerPortTextBox.Text = server.server_port.ToString();
             PasswordTextBox.Text = server.password;
-            EncryptionSelect.Text = server.method ?? "aes-256-cfb";
+            EncryptionSelect.SelectedItem = EncryptionMethod.GetMethod(server.method ?? Server.DefaultMethod);
             PluginTextBox.Text = server.plugin;
             PluginOptionsTextBox.Text = server.plugin_opts;
             PluginArgumentsTextBox.Text = server.plugin_args;
+
+            bool showPluginArgInput = !string.IsNullOrEmpty(server.plugin_args);
+            NeedPluginArgCheckBox.Checked = showPluginArgInput;
+            ShowHidePluginArgInput(showPluginArgInput);
+
             RemarksTextBox.Text = server.remarks;
             TimeoutTextBox.Text = server.timeout.ToString();
+
+            isChange = false;
+        }
+
+        private void ShowHidePluginArgInput(bool show)
+        {
+            PluginArgumentsTextBox.Visible = show;
+            PluginArgumentsLabel.Visible = show;
         }
 
         private void LoadServerNameListToUI(Configuration configuration)
@@ -153,7 +427,7 @@ namespace Shadowsocks.View
             ServersListBox.Items.Clear();
             foreach (Server server in configuration.configs)
             {
-                ServersListBox.Items.Add(server.FriendlyName());
+                ServersListBox.Items.Add(server.ToString());
             }
         }
 
@@ -171,19 +445,17 @@ namespace Shadowsocks.View
             ServersListBox.SelectedIndex = _lastSelectedIndex;
             UpdateButtons();
             LoadSelectedServerDetails();
+
             ProxyPortTextBox.Text = _modifiedConfiguration.localPort.ToString();
             PortableModeCheckBox.Checked = _modifiedConfiguration.portableMode;
+
+            ApplyButton.Enabled = false;
         }
 
         private bool SaveValidConfiguration()
         {
-            if (!ValidateAndSaveSelectedServerDetails())
+            if (!ValidateAndSaveSelectedServerDetails(isSave: true))
             {
-                return false;
-            }
-            if (_modifiedConfiguration.configs.Count == 0)
-            {
-                MessageBox.Show(I18N.GetString("Please add at least one server"));
                 return false;
             }
 
@@ -230,7 +502,7 @@ namespace Shadowsocks.View
             }
             if (_lastSelectedIndex >= 0 && _lastSelectedIndex < _modifiedConfiguration.configs.Count)
             {
-                ServersListBox.Items[_lastSelectedIndex] = _modifiedConfiguration.configs[_lastSelectedIndex].FriendlyName();
+                ServersListBox.Items[_lastSelectedIndex] = _modifiedConfiguration.configs[_lastSelectedIndex].ToString();
             }
             UpdateButtons();
             LoadSelectedServerDetails();
@@ -239,90 +511,41 @@ namespace Shadowsocks.View
 
         private void AddButton_Click(object sender, EventArgs e)
         {
-            if (!ValidateAndSaveSelectedServerDetails())
+            if (ValidateAndSaveSelectedServerDetails(isSave: true))
             {
-                return;
+                Configuration.AddDefaultServerOrServer(_modifiedConfiguration);
+                LoadServerNameListToUI(_modifiedConfiguration);
+                _lastSelectedIndex = (ServersListBox.SelectedIndex = _modifiedConfiguration.configs.Count - 1);
             }
-            Server server = Configuration.GetDefaultServer();
-            _modifiedConfiguration.configs.Add(server);
-            LoadServerNameListToUI(_modifiedConfiguration);
-            ServersListBox.SelectedIndex = _modifiedConfiguration.configs.Count - 1;
-            _lastSelectedIndex = ServersListBox.SelectedIndex;
         }
 
         private void DuplicateButton_Click(object sender, EventArgs e)
         {
-            if (!ValidateAndSaveSelectedServerDetails())
+            if (ValidateAndSaveSelectedServerDetails(isCopy: true))
             {
-                return;
+                Server currServer = _modifiedConfiguration.configs[_lastSelectedIndex];
+                Configuration.AddDefaultServerOrServer(_modifiedConfiguration, currServer, _lastSelectedIndex + 1);
+                LoadServerNameListToUI(_modifiedConfiguration);
+                _lastSelectedIndex = (ServersListBox.SelectedIndex = (_lastSelectedIndex + 1));
             }
-            Server currServer = _modifiedConfiguration.configs[_lastSelectedIndex];
-            var currIndex = _modifiedConfiguration.configs.IndexOf(currServer);
-            _modifiedConfiguration.configs.Insert(currIndex + 1, currServer);
-            LoadServerNameListToUI(_modifiedConfiguration);
-            ServersListBox.SelectedIndex = currIndex + 1;
-            _lastSelectedIndex = ServersListBox.SelectedIndex;
         }
 
         private void DeleteButton_Click(object sender, EventArgs e)
         {
-            _lastSelectedIndex = ServersListBox.SelectedIndex;
-            if (_lastSelectedIndex >= 0 && _lastSelectedIndex < _modifiedConfiguration.configs.Count)
+            _modifiedConfiguration.configs.RemoveAt(_lastSelectedIndex);
+
+            if (_modifiedConfiguration.configs.Count == 0)
             {
-                _modifiedConfiguration.configs.RemoveAt(_lastSelectedIndex);
+                Configuration.AddDefaultServerOrServer(_modifiedConfiguration);
             }
-            if (_lastSelectedIndex >= _modifiedConfiguration.configs.Count)
-            {
-                // can be -1
-                _lastSelectedIndex = _modifiedConfiguration.configs.Count - 1;
-            }
-            ServersListBox.SelectedIndex = _lastSelectedIndex;
+
             LoadServerNameListToUI(_modifiedConfiguration);
-            ServersListBox.SelectedIndex = _lastSelectedIndex;
+            ServersListBox.SelectedIndexChanged -= ServersListBox_SelectedIndexChanged;
+
+            _lastSelectedIndex = (ServersListBox.SelectedIndex = (_lastSelectedIndex >= _modifiedConfiguration.configs.Count ? (_modifiedConfiguration.configs.Count - 1) : _lastSelectedIndex));
+
+            ServersListBox.SelectedIndexChanged += ServersListBox_SelectedIndexChanged;
             LoadSelectedServerDetails();
-        }
-
-        private void OKButton_Click(object sender, EventArgs e)
-        {
-            if (SaveValidConfiguration())
-            {
-                this.Close();
-            }
-        }
-
-        private void CancelButton_Click(object sender, EventArgs e)
-        {
-            this.Close();
-        }
-
-        private void ConfigForm_Shown(object sender, EventArgs e)
-        {
-            IPTextBox.Focus();
-        }
-
-        private void ConfigForm_FormClosed(object sender, FormClosedEventArgs e)
-        {
-            controller.ConfigChanged -= controller_ConfigChanged;
-        }
-
-        private void MoveConfigItem(int step)
-        {
-            int index = ServersListBox.SelectedIndex;
-            Server server = _modifiedConfiguration.configs[index];
-            object item = ServersListBox.Items[index];
-
-            _modifiedConfiguration.configs.Remove(server);
-            _modifiedConfiguration.configs.Insert(index + step, server);
-            _modifiedConfiguration.index += step;
-
-            ServersListBox.BeginUpdate();
-            ServersListBox.Enabled = false;
-            _lastSelectedIndex = index + step;
-            ServersListBox.Items.Remove(item);
-            ServersListBox.Items.Insert(index + step, item);
-            ServersListBox.Enabled = true;
-            ServersListBox.SelectedIndex = index + step;
-            ServersListBox.EndUpdate();
 
             UpdateButtons();
         }
@@ -336,10 +559,6 @@ namespace Shadowsocks.View
 
         private void MoveUpButton_Click(object sender, EventArgs e)
         {
-            if (!ValidateAndSaveSelectedServerDetails())
-            {
-                return;
-            }
             if (ServersListBox.SelectedIndex > 0)
             {
                 MoveConfigItem(-1);  // -1 means move backward
@@ -348,19 +567,67 @@ namespace Shadowsocks.View
 
         private void MoveDownButton_Click(object sender, EventArgs e)
         {
-            if (!ValidateAndSaveSelectedServerDetails())
-            {
-                return;
-            }
             if (ServersListBox.SelectedIndex < ServersListBox.Items.Count - 1)
             {
                 MoveConfigItem(+1);  // +1 means move forward
             }
         }
 
+        private void MoveConfigItem(int step)
+        {
+            var server = _modifiedConfiguration.configs[_lastSelectedIndex];
+            var newIndex = _lastSelectedIndex + step;
+
+            _modifiedConfiguration.configs.RemoveAt(_lastSelectedIndex);
+            _modifiedConfiguration.configs.Insert(newIndex, server);
+
+            ServersListBox.BeginUpdate();
+
+            LoadServerNameListToUI(_modifiedConfiguration);
+
+            _lastSelectedIndex = newIndex;
+            ServersListBox.SelectedIndex = newIndex;
+            ServersListBox.EndUpdate();
+
+            UpdateButtons();
+        }
+
+        private void OKButton_Click(object sender, EventArgs e)
+        {
+            if (SaveValidConfiguration())
+            {
+                Close();
+            }
+        }
+
+        private void CancelButton_Click(object sender, EventArgs e)
+        {
+            Close();
+        }
+
+        private void ApplyButton_Click(object sender, EventArgs e)
+        {
+            SaveValidConfiguration();
+        }
+
+        private void ConfigForm_Shown(object sender, EventArgs e)
+        {
+            IPTextBox.Focus();
+        }
+
+        private void ConfigForm_FormClosed(object sender, FormClosedEventArgs e)
+        {
+            controller.ConfigChanged -= Controller_ConfigChanged;
+        }
+
         private void ShowPasswdCheckBox_CheckedChanged(object sender, EventArgs e)
         {
-            this.PasswordTextBox.UseSystemPasswordChar = !this.ShowPasswdCheckBox.Checked;
+            PasswordTextBox.UseSystemPasswordChar = !ShowPasswdCheckBox.Checked;
+        }
+
+        private void UsePluginArgCheckBox_CheckedChanged(object sender, EventArgs e)
+        {
+            ShowHidePluginArgInput(NeedPluginArgCheckBox.Checked);
         }
     }
 }

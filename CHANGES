@@ -1,3 +1,92 @@
+4.1.10.0 2020-4-11
+- Fix NLog config file issue (#2841, #2846)
+- Tweak log level
+
+4.1.9.3 2020-03-31
+- Set default method to chacha20-ietf-poly1305
+- Using hash in PAC URL (#2759)
+- Rename and translate title of statistics form (#2768)
+- Russian translation (#2767)
+- Refine Updated Notification logic
+- Using NLog (#2783)
+- Bug fix: wrong server in tray menu (#2782)
+- Deprecate unsafe encryption method (#2757, #2801)
+- Bug fix: server config is overwritten by others when moving up/down (#2830)
+- Other minor bug fixes and improvements
+
+4.1.9.2 2019-12-25
+- Fix i18n issues (#2740, #2741)
+
+4.1.9.1 2019-12-22
+- Fix #2739: PAC does not work
+- Translate Show Plugin Option
+
+4.1.9.0 2019-12-21
+- Refine merge PAC+abp script logic (#2598)
+- Format the proxy hostname in GfwListUpdater (#2616)
+- Fix the trayIcon display issue under Win10 dark theme (#2658)
+- Set default encryption method as chacha20-ietf-poly1305 (#2699)
+- Translate statistics config form (#2698)
+- Update .Net Framework download link (#2731)
+- Use MD5 hash instead of timestamp for PAC URL parameter (#2705)
+- Add option "Show Plugin Output" (#2722)
+- Support custom GFWListUrl defined in config file (#2728)
+- Implement new I18N csv structure (#2712)
+- Refine message when plugin program file does not exist (#2730)
+- Other minor bug fixes and improvements
+
+4.1.8 2019-10-31
+- Update the nuget configurations and packages
+- Fix some crash about thread-safe in statistics (#2591)
+- Fix server list index invalidation (#2543, #2542)
+- Refine PAC server (#2539)
+- Update the GFWList via IPv6Loopback when available
+- Modify PAC request behavior (#2526)
+- Fix .NET 4.7.2 on Win7 TLS compatibility (#2473)
+- Other minor bug fixes and improvements
+
+4.1.7.1 2019-07-14
+- Fix unexpected server delete behavior (#2459)
+- Reduce info log when checking Windows 10 Light Theme
+
+4.1.7 2019-07-10
+- Fix UDP relay (#2387)
+- Support Windows 10 1903 Light Theme (#2379)
+- Listening on local IPv6 interface (#2419) (Experimental)
+- Turn off per-monitor DPI awareness as it is not supported (#2427)
+- Fix a defect when parsing ss:// URL (#2364)
+- Upgrade the development environment to VS2017 with .NET Framework 4.7.2
+- Refactoring config form (#2410)
+- Refactoring tray icon
+- Other minor bug fixes and improvements
+
+4.1.6 2019-04-17
+- Add http proxy "basic access authentication"
+- Add check box to toggle plugin argument input
+- Add apply button for server configuration form
+- Update UI of switching proxy mode
+- Update exception handler for port assignment
+
+4.1.5 2019-03-08
+- Update nuget packages
+- Update the PAC javascript to support user rules in a better way
+- Other minor bug fixes and improvements
+
+4.1.4 2019-02-04
+- Update Privoxy to 3.0.28
+- Enlarge Privoxy max client connections
+- Update the system proxy when user-rule.txt is changed
+- Register restart after system reboot
+
+4.1.3.1 2018-12-09
+- Fix error when usersettings bypasslist is null
+
+4.1.3 2018-12-08
+- Refine sysproxy exception handling
+- Keep user bypass setting when use global proxy mode
+- Update .Net download link
+- Minor improvements
+
 4.1.2 2018-09-13
 - Fix plugin CLI argument environment variable issue (#1969 #1818)
 - Other minor bug fixes and improvements (#1978 #1968 #1993)

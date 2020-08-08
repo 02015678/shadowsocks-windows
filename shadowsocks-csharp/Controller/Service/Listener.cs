@@ -4,13 +4,15 @@ using System.Linq;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
-
+using NLog;
 using Shadowsocks.Model;
 
 namespace Shadowsocks.Controller
 {
     public class Listener
     {
+        private static Logger logger = LogManager.GetCurrentClassLogger();
+
         public interface IService
         {
             bool Handle(byte[] firstPacket, int length, Socket socket, object state);
@@ -27,9 +29,14 @@ namespace Shadowsocks.Controller
 
         public class UDPState
         {
+            public UDPState(Socket s)
+            {
+                socket = s;
+                remoteEndPoint = new IPEndPoint(s.AddressFamily == AddressFamily.InterNetworkV6 ? IPAddress.IPv6Any : IPAddress.Any, 0);
+            }
             public Socket socket;
             public byte[] buffer = new byte[4096];
-            public EndPoint remoteEndPoint = new IPEndPoint(IPAddress.Any, 0);
+            public EndPoint remoteEndPoint;
         }
 
         Configuration _config;
@@ -46,16 +53,7 @@ namespace Shadowsocks.Controller
         private bool CheckIfPortInUse(int port)
         {
             IPGlobalProperties ipProperties = IPGlobalProperties.GetIPGlobalProperties();
-            IPEndPoint[] ipEndPoints = ipProperties.GetActiveTcpListeners();
-
-            foreach (IPEndPoint endPoint in ipEndPoints)
-            {
-                if (endPoint.Port == port)
-                {
-                    return true;
-                }
-            }
-            return false;
+            return ipProperties.GetActiveTcpListeners().Any(endPoint => endPoint.Port == port);
         }
 
         public void Start(Configuration config)
@@ -64,19 +62,19 @@ namespace Shadowsocks.Controller
             this._shareOverLAN = config.shareOverLan;
 
             if (CheckIfPortInUse(_config.localPort))
-                throw new Exception(I18N.GetString("Port already in use"));
+                throw new Exception(I18N.GetString("Port {0} already in use", _config.localPort));
 
             try
             {
                 // Create a TCP/IP socket.
-                _tcpSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-                _udpSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+                _tcpSocket = new Socket(config.isIPv6Enabled ? AddressFamily.InterNetworkV6 : AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+                _udpSocket = new Socket(config.isIPv6Enabled ? AddressFamily.InterNetworkV6 : AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
                 _tcpSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
                 _udpSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
                 IPEndPoint localEndPoint = null;
                 localEndPoint = _shareOverLAN
-                    ? new IPEndPoint(IPAddress.Any, _config.localPort)
-                    : new IPEndPoint(IPAddress.Loopback, _config.localPort);
+                    ? new IPEndPoint(config.isIPv6Enabled ? IPAddress.IPv6Any : IPAddress.Any, _config.localPort)
+                    : new IPEndPoint(config.isIPv6Enabled ? IPAddress.IPv6Loopback : IPAddress.Loopback, _config.localPort);
 
                 // Bind the socket to the local endpoint and listen for incoming connections.
                 _tcpSocket.Bind(localEndPoint);
@@ -84,11 +82,10 @@ namespace Shadowsocks.Controller
                 _tcpSocket.Listen(1024);
 
                 // Start an asynchronous socket to listen for connections.
-                Logging.Info($"Shadowsocks started ({UpdateChecker.Version})");
-                Logging.Info(Encryption.EncryptorFactory.DumpRegisteredEncryptor());
+                logger.Info($"Shadowsocks started ({UpdateChecker.Version})");
+                logger.Debug(Encryption.EncryptorFactory.DumpRegisteredEncryptor());
                 _tcpSocket.BeginAccept(new AsyncCallback(AcceptCallback), _tcpSocket);
-                UDPState udpState = new UDPState();
-                udpState.socket = _udpSocket;
+                UDPState udpState = new UDPState(_udpSocket);
                 _udpSocket.BeginReceiveFrom(udpState.buffer, 0, udpState.buffer.Length, 0, ref udpState.remoteEndPoint, new AsyncCallback(RecvFromCallback), udpState);
             }
             catch (SocketException)
@@ -111,7 +108,7 @@ namespace Shadowsocks.Controller
                 _udpSocket = null;
             }
 
-            _services.ForEach(s=>s.Stop());
+            _services.ForEach(s => s.Stop());
         }
 
         public void RecvFromCallback(IAsyncResult ar)
@@ -134,7 +131,7 @@ namespace Shadowsocks.Controller
             }
             catch (Exception ex)
             {
-                Logging.Debug(ex);
+                logger.Debug(ex);
             }
             finally
             {
@@ -173,7 +170,7 @@ namespace Shadowsocks.Controller
             }
             catch (Exception e)
             {
-                Logging.LogUsefulException(e);
+                logger.LogUsefulException(e);
             }
             finally
             {
@@ -189,7 +186,7 @@ namespace Shadowsocks.Controller
                 }
                 catch (Exception e)
                 {
-                    Logging.LogUsefulException(e);
+                    logger.LogUsefulException(e);
                 }
             }
         }
@@ -220,7 +217,7 @@ namespace Shadowsocks.Controller
             }
             catch (Exception e)
             {
-                Logging.LogUsefulException(e);
+                logger.LogUsefulException(e);
                 conn.Close();
             }
         }

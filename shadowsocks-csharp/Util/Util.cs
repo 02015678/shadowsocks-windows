@@ -1,4 +1,5 @@
-﻿using System;
+﻿using NLog;
+using System;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
@@ -26,6 +27,8 @@ namespace Shadowsocks.Util
 
     public static class Utils
     {
+        private static Logger logger = LogManager.GetCurrentClassLogger();
+
         private static string _tempPath = null;
 
         // return path to store temporary files
@@ -38,7 +41,7 @@ namespace Shadowsocks.Util
                 {
                     if (isPortableMode)
                     {
-                        _tempPath = Directory.CreateDirectory(Path.Combine(Application.StartupPath, "ss_win_temp")).FullName;
+                        _tempPath = Directory.CreateDirectory("ss_win_temp").FullName;
                         // don't use "/", it will fail when we call explorer /select xxx/ss_win_temp\xxx.log
                     }
                     else
@@ -48,11 +51,42 @@ namespace Shadowsocks.Util
                 }
                 catch (Exception e)
                 {
-                    Logging.Error(e);
+                    logger.Error(e);
                     throw;
                 }
             }
             return _tempPath;
+        }
+
+        public enum WindowsThemeMode { Dark, Light }
+
+        // Support on Windows 10 1903+
+        public static WindowsThemeMode GetWindows10SystemThemeSetting()
+        {
+            WindowsThemeMode themeMode = WindowsThemeMode.Dark;
+            try
+            {
+                RegistryKey reg_ThemesPersonalize = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", false);
+                if (reg_ThemesPersonalize.GetValue("SystemUsesLightTheme") != null)
+                {
+                    if ((int)(reg_ThemesPersonalize.GetValue("SystemUsesLightTheme")) == 0) // 0:dark mode, 1:light mode
+                        themeMode = WindowsThemeMode.Dark;
+                    else
+                        themeMode = WindowsThemeMode.Light;
+                }
+                else
+                {
+                    throw new Exception("Reg-Value SystemUsesLightTheme not found.");
+                }
+            }
+            catch
+            {
+
+                logger.Debug(
+                        $"Cannot get Windows 10 system theme mode, return default value 0 (dark mode).");
+
+            }
+            return themeMode;
         }
 
         // return a full path with filename combined which pointed to the temporary directory
@@ -219,7 +253,7 @@ namespace Shadowsocks.Util
             }
             catch (Exception e)
             {
-                Logging.LogUsefulException(e);
+                logger.LogUsefulException(e);
                 return null;
             }
         }

@@ -4,7 +4,7 @@ using System.Net;
 using System.Text.RegularExpressions;
 
 using Newtonsoft.Json.Linq;
-
+using NLog;
 using Shadowsocks.Model;
 using Shadowsocks.Util;
 
@@ -12,8 +12,10 @@ namespace Shadowsocks.Controller
 {
     public class UpdateChecker
     {
+        private static Logger logger = LogManager.GetCurrentClassLogger();
+
         private const string UpdateURL = "https://api.github.com/repos/shadowsocks/shadowsocks-windows/releases";
-        private const string UserAgent = "Mozilla/5.0 (Windows NT 5.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/35.0.3319.102 Safari/537.36";
+        private const string UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.3626.121 Safari/537.36";
 
         private Configuration config;
         public bool NewVersionFound;
@@ -24,7 +26,7 @@ namespace Shadowsocks.Controller
         public string LatestVersionLocalName;
         public event EventHandler CheckUpdateCompleted;
 
-        public const string Version = "4.1.2";
+        public const string Version = "4.1.10.0";
 
         private class CheckUpdateTimer : System.Timers.Timer
         {
@@ -60,14 +62,14 @@ namespace Shadowsocks.Controller
 
             try
             {
-                Logging.Debug("Checking updates...");
+                logger.Info("Checking updates...");
                 WebClient http = CreateWebClient();
                 http.DownloadStringCompleted += http_DownloadStringCompleted;
                 http.DownloadStringAsync(new Uri(UpdateURL));
             }
             catch (Exception ex)
             {
-                Logging.LogUsefulException(ex);
+                logger.LogUsefulException(ex);
             }
         }
 
@@ -84,7 +86,7 @@ namespace Shadowsocks.Controller
                 {
                     foreach (JObject release in result)
                     {
-                        var isPreRelease = (bool) release["prerelease"];
+                        var isPreRelease = (bool)release["prerelease"];
                         if (isPreRelease && !config.checkPreRelease)
                         {
                             continue;
@@ -117,7 +119,7 @@ namespace Shadowsocks.Controller
                 }
                 else
                 {
-                    Logging.Debug("No update is available");
+                    logger.Info("No update is available");
                     if (CheckUpdateCompleted != null)
                     {
                         CheckUpdateCompleted(this, new EventArgs());
@@ -126,7 +128,7 @@ namespace Shadowsocks.Controller
             }
             catch (Exception ex)
             {
-                Logging.LogUsefulException(ex);
+                logger.LogUsefulException(ex);
             }
         }
 
@@ -141,7 +143,7 @@ namespace Shadowsocks.Controller
             }
             catch (Exception ex)
             {
-                Logging.LogUsefulException(ex);
+                logger.LogUsefulException(ex);
             }
         }
 
@@ -151,10 +153,10 @@ namespace Shadowsocks.Controller
             {
                 if (e.Error != null)
                 {
-                    Logging.LogUsefulException(e.Error);
+                    logger.LogUsefulException(e.Error);
                     return;
                 }
-                Logging.Debug($"New version {LatestVersionNumber}{LatestVersionSuffix} found: {LatestVersionLocalName}");
+                logger.Info($"New version {LatestVersionNumber}{LatestVersionSuffix} found: {LatestVersionLocalName}");
                 if (CheckUpdateCompleted != null)
                 {
                     CheckUpdateCompleted(this, new EventArgs());
@@ -162,7 +164,7 @@ namespace Shadowsocks.Controller
             }
             catch (Exception ex)
             {
-                Logging.LogUsefulException(ex);
+                logger.LogUsefulException(ex);
             }
         }
 
@@ -170,7 +172,7 @@ namespace Shadowsocks.Controller
         {
             WebClient http = new WebClient();
             http.Headers.Add("User-Agent", UserAgent);
-            http.Proxy = new WebProxy(IPAddress.Loopback.ToString(), config.localPort);
+            http.Proxy = new WebProxy(config.localHost, config.localPort);
             return http;
         }
 
@@ -189,7 +191,7 @@ namespace Shadowsocks.Controller
 
             public static Asset ParseAsset(JObject assertJObject)
             {
-                var name = (string) assertJObject["name"];
+                var name = (string)assertJObject["name"];
                 Match match = Regex.Match(name, @"^Shadowsocks-(?<version>\d+(?:\.\d+)*)(?:|-(?<suffix>.+))\.\w+$",
                     RegexOptions.IgnoreCase);
                 if (match.Success)
@@ -198,7 +200,7 @@ namespace Shadowsocks.Controller
 
                     var asset = new Asset
                     {
-                        browser_download_url = (string) assertJObject["browser_download_url"],
+                        browser_download_url = (string)assertJObject["browser_download_url"],
                         name = name,
                         version = version
                     };

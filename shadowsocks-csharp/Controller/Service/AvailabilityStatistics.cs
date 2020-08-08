@@ -9,6 +9,7 @@ using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
+using NLog;
 using Shadowsocks.Model;
 using Shadowsocks.Util;
 
@@ -18,6 +19,8 @@ namespace Shadowsocks.Controller
 
     public sealed class AvailabilityStatistics : IDisposable
     {
+        private static Logger logger = LogManager.GetCurrentClassLogger();
+
         public const string DateTimePattern = "yyyy-MM-dd HH:mm:ss";
         private const string StatisticsFilesName = "shadowsocks.availability.json";
         public static string AvailabilityStatisticsFile;
@@ -71,9 +74,8 @@ namespace Shadowsocks.Controller
         //tasks
         private readonly TimeSpan _delayBeforeStart = TimeSpan.FromSeconds(1);
         private readonly TimeSpan _retryInterval = TimeSpan.FromMinutes(2);
-        private Timer _recorder; //analyze and save cached records to RawStatistics and filter records
         private TimeSpan RecordingInterval => TimeSpan.FromMinutes(Config.DataCollectionMinutes);
-        private Timer _speedMonior;
+        private Timer _perSecondTimer; //analyze and save cached records to RawStatistics and filter records
         private readonly TimeSpan _monitorInterval = TimeSpan.FromSeconds(1);
         //private Timer _writer; //write RawStatistics to file
         //private readonly TimeSpan _writingInterval = TimeSpan.FromMinutes(1);
@@ -99,31 +101,43 @@ namespace Shadowsocks.Controller
             {
                 if (Config.StatisticsEnabled)
                 {
-                    StartTimerWithoutState(ref _recorder, Run, RecordingInterval);
                     LoadRawStatistics();
-                    StartTimerWithoutState(ref _speedMonior, UpdateSpeed, _monitorInterval);
+                    if (_perSecondTimer == null)
+                    {
+                        _perSecondTimer = new Timer(OperationsPerSecond, new Counter(), _delayBeforeStart, TimeSpan.FromSeconds(1));
+                    }
                 }
                 else
                 {
-                    _recorder?.Dispose();
-                    _speedMonior?.Dispose();
+                    _perSecondTimer?.Dispose();
                 }
             }
             catch (Exception e)
             {
-                Logging.LogUsefulException(e);
+                logger.LogUsefulException(e);
             }
         }
 
-        private void StartTimerWithoutState(ref Timer timer, TimerCallback callback, TimeSpan interval)
+        private void OperationsPerSecond(object state)
         {
-            if (timer?.Change(_delayBeforeStart, interval) == null)
+            lock(state)
             {
-                timer = new Timer(callback, null, _delayBeforeStart, interval);
+                var counter = state as Counter;
+                if (counter.count % _monitorInterval.TotalSeconds == 0)
+                {
+                    UpdateSpeed();
+                }
+
+                if (counter.count % RecordingInterval.TotalSeconds == 0)
+                {
+                    Run();
+                }
+
+                counter.count++;
             }
         }
 
-        private void UpdateSpeed(object _)
+        private void UpdateSpeed()
         {
             foreach (var kv in _inOutBoundRecords)
             {
@@ -137,13 +151,14 @@ namespace Shadowsocks.Controller
                 var inboundSpeed = GetSpeedInKiBPerSecond(inboundDelta, _monitorInterval.TotalSeconds);
                 var outboundSpeed = GetSpeedInKiBPerSecond(outboundDelta, _monitorInterval.TotalSeconds);
 
+                // not thread safe
                 var inR = _inboundSpeedRecords.GetOrAdd(id, (k) => new List<int>());
                 var outR = _outboundSpeedRecords.GetOrAdd(id, (k) => new List<int>());
 
                 inR.Add(inboundSpeed);
                 outR.Add(outboundSpeed);
 
-                Logging.Debug(
+                logger.Debug(
                     $"{id}: current/max inbound {inboundSpeed}/{inR.Max()} KiB/s, current/max outbound {outboundSpeed}/{outR.Max()} KiB/s");
             }
         }
@@ -155,7 +170,7 @@ namespace Shadowsocks.Controller
             _latencyRecords.Clear();
         }
 
-        private void Run(object _)
+        private void Run()
         {
             UpdateRecords();
             Reset();
@@ -165,35 +180,47 @@ namespace Shadowsocks.Controller
         {
             var records = new Dictionary<string, StatisticsRecord>();
             UpdateRecordsState state = new UpdateRecordsState();
-            state.counter = _controller.GetCurrentConfiguration().configs.Count;
-            foreach (var server in _controller.GetCurrentConfiguration().configs)
+            int serverCount = _controller.GetCurrentConfiguration().configs.Count;
+            state.counter = serverCount;
+            bool isPing = Config.Ping;
+            for (int i = 0; i < serverCount; i++)
             {
-                var id = server.Identifier();
-                List<int> inboundSpeedRecords = null;
-                List<int> outboundSpeedRecords = null;
-                List<int> latencyRecords = null;
-                _inboundSpeedRecords.TryGetValue(id, out inboundSpeedRecords);
-                _outboundSpeedRecords.TryGetValue(id, out outboundSpeedRecords);
-                _latencyRecords.TryGetValue(id, out latencyRecords);
-                StatisticsRecord record = new StatisticsRecord(id, inboundSpeedRecords, outboundSpeedRecords, latencyRecords);
-                /* duplicate server identifier */
-                if (records.ContainsKey(id))
-                    records[id] = record;
-                else
-                    records.Add(id, record);
-                if (Config.Ping)
+                try
                 {
-                    MyPing ping = new MyPing(server, Repeat);
-                    ping.Completed += ping_Completed;
-                    ping.Start(new PingState { state = state, record = record });
+                    var server = _controller.GetCurrentConfiguration().configs[i];
+                    var id = server.Identifier();
+                    List<int> inboundSpeedRecords = null;
+                    List<int> outboundSpeedRecords = null;
+                    List<int> latencyRecords = null;
+                    _inboundSpeedRecords.TryGetValue(id, out inboundSpeedRecords);
+                    _outboundSpeedRecords.TryGetValue(id, out outboundSpeedRecords);
+                    _latencyRecords.TryGetValue(id, out latencyRecords);
+                    StatisticsRecord record = new StatisticsRecord(id, inboundSpeedRecords, outboundSpeedRecords, latencyRecords);
+                    /* duplicate server identifier */
+                    if (records.ContainsKey(id))
+                        records[id] = record;
+                    else
+                        records.Add(id, record);
+                    if (isPing)
+                    {
+                        // FIXME: on ping completed, every thing could be asynchrously changed.
+                        // focus on: Config/ RawStatistics
+                        MyPing ping = new MyPing(server, Repeat);
+                        ping.Completed += ping_Completed;
+                        ping.Start(new PingState { state = state, record = record });
+                    }
+                    else if (!record.IsEmptyData())
+                    {
+                        AppendRecord(id, record);
+                    }
                 }
-                else if (!record.IsEmptyData())
+                catch (Exception e)
                 {
-                    AppendRecord(id, record);
+                    logger.Debug("config changed asynchrously, just ignore this server");
                 }
             }
 
-            if (!Config.Ping)
+            if (!isPing)
             {
                 Save();
                 FilterRawStatistics();
@@ -211,7 +238,7 @@ namespace Shadowsocks.Controller
             {
                 AppendRecord(server.Identifier(), record);
             }
-            Logging.Debug($"Ping {server.FriendlyName()} {e.RoundtripTime.Count} times, {(100 - record.PackageLoss * 100)}% packages loss, min {record.MinResponse} ms, max {record.MaxResponse} ms, avg {record.AverageResponse} ms");
+            logger.Debug($"Ping {server} {e.RoundtripTime.Count} times, {(100 - record.PackageLoss * 100)}% packages loss, min {record.MinResponse} ms, max {record.MaxResponse} ms, avg {record.AverageResponse} ms");
             if (Interlocked.Decrement(ref state.counter) == 0)
             {
                 Save();
@@ -236,13 +263,13 @@ namespace Shadowsocks.Controller
             }
             catch (Exception e)
             {
-                Logging.LogUsefulException(e);
+                logger.LogUsefulException(e);
             }
         }
 
         private void Save()
         {
-            Logging.Debug($"save statistics to {AvailabilityStatisticsFile}");
+            logger.Debug($"save statistics to {AvailabilityStatisticsFile}");
             if (RawStatistics.Count == 0)
             {
                 return;
@@ -259,7 +286,7 @@ namespace Shadowsocks.Controller
             }
             catch (IOException e)
             {
-                Logging.LogUsefulException(e);
+                logger.LogUsefulException(e);
             }
         }
 
@@ -276,23 +303,22 @@ namespace Shadowsocks.Controller
         {
             try
             {
-                Logging.Debug("filter raw statistics");
+                logger.Debug("filter raw statistics");
                 if (RawStatistics == null) return;
-                if (FilteredStatistics == null)
-                {
-                    FilteredStatistics = new Statistics();
-                }
+                var filteredStatistics = new Statistics();
 
                 foreach (var serverAndRecords in RawStatistics)
                 {
                     var server = serverAndRecords.Key;
                     var filteredRecords = serverAndRecords.Value.FindAll(IsValidRecord);
-                    FilteredStatistics[server] = filteredRecords;
+                    filteredStatistics[server] = filteredRecords;
                 }
+
+                FilteredStatistics = filteredStatistics;
             }
             catch (Exception e)
             {
-                Logging.LogUsefulException(e);
+                logger.LogUsefulException(e);
             }
         }
 
@@ -301,7 +327,7 @@ namespace Shadowsocks.Controller
             try
             {
                 var path = AvailabilityStatisticsFile;
-                Logging.Debug($"loading statistics from {path}");
+                logger.Debug($"loading statistics from {path}");
                 if (!File.Exists(path))
                 {
                     using (File.Create(path))
@@ -314,9 +340,8 @@ namespace Shadowsocks.Controller
             }
             catch (Exception e)
             {
-                Logging.LogUsefulException(e);
-                Console.WriteLine($"failed to load statistics; try to reload {_retryInterval.TotalMinutes} minutes later");
-                _recorder.Change(_retryInterval, RecordingInterval);
+                logger.LogUsefulException(e);
+                Console.WriteLine($"failed to load statistics; use runtime statistics, some data may be lost");
             }
         }
 
@@ -328,8 +353,7 @@ namespace Shadowsocks.Controller
 
         public void Dispose()
         {
-            _recorder.Dispose();
-            _speedMonior.Dispose();
+            _perSecondTimer.Dispose();
         }
 
         public void UpdateLatency(Server server, int latency)
@@ -372,6 +396,11 @@ namespace Shadowsocks.Controller
             });
         }
 
+        private class Counter
+        {
+            public int count = 0;
+        }
+
         class UpdateRecordsState
         {
             public int counter;
@@ -385,6 +414,8 @@ namespace Shadowsocks.Controller
 
         class MyPing
         {
+            private static Logger logger = LogManager.GetCurrentClassLogger();
+
             //arguments for ICMP tests
             public const int TimeoutMilliseconds = 500;
 
@@ -419,7 +450,7 @@ namespace Shadowsocks.Controller
             {
                 try
                 {
-                    Logging.Debug($"Ping {server.FriendlyName()}");
+                    logger.Debug($"Ping {server}");
                     if (ip == null)
                     {
                         ip = Dns.GetHostAddresses(server.server)
@@ -435,8 +466,8 @@ namespace Shadowsocks.Controller
                 }
                 catch (Exception e)
                 {
-                    Logging.Error($"An exception occured while eveluating {server.FriendlyName()}");
-                    Logging.LogUsefulException(e);
+                    logger.Error($"An exception occured while eveluating {server}");
+                    logger.LogUsefulException(e);
                     FireCompleted(e, userstate);
                 }
             }
@@ -447,20 +478,20 @@ namespace Shadowsocks.Controller
                 {
                     if (e.Reply.Status == IPStatus.Success)
                     {
-                        Logging.Debug($"Ping {server.FriendlyName()} {e.Reply.RoundtripTime} ms");
+                        logger.Debug($"Ping {server} {e.Reply.RoundtripTime} ms");
                         RoundtripTime.Add((int?)e.Reply.RoundtripTime);
                     }
                     else
                     {
-                        Logging.Debug($"Ping {server.FriendlyName()} timeout");
+                        logger.Debug($"Ping {server} timeout");
                         RoundtripTime.Add(null);
                     }
                     TestNext(e.UserState);
                 }
                 catch (Exception ex)
                 {
-                    Logging.Error($"An exception occured while eveluating {server.FriendlyName()}");
-                    Logging.LogUsefulException(ex);
+                    logger.Error($"An exception occured while eveluating {server}");
+                    logger.LogUsefulException(ex);
                     FireCompleted(ex, e.UserState);
                 }
             }
